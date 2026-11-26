@@ -153,7 +153,10 @@ public class MirTimeGuard implements SimpleCommand {
         if (!(e.getCommandSource() instanceof Player p)) return;
         if (isAdmin(p)) return;
 
-        String cmd = e.getCommand().toLowerCase().split("\\s+");
+        String raw = e.getCommand().toLowerCase().trim();
+        int sp = raw.indexOf(' ');
+        String cmd = (sp == -1) ? raw : raw.substring(0, sp);
+
         if (cmd.equals("velocity") || cmd.equals("vplugins") || cmd.equals("glist") || cmd.equals("server")) {
             e.setResult(CommandExecuteEvent.CommandResult.denied());
             p.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lMIR-TIME &8» &cНеизвестная или недоступная команда!"));
@@ -163,14 +166,14 @@ public class MirTimeGuard implements SimpleCommand {
     @Override
     public void execute(Invocation invocation) {
         CommandSource src = invocation.source();
-        String[] args = invocation.arguments();
+        List<String> args = Arrays.asList(invocation.arguments());
 
         if (!isAdmin(src)) {
             src.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lMIR-TIME GUARD &8» &cУ вас нет прав!"));
             return;
         }
 
-        if (args.length == 0 || args.equalsIgnoreCase("stats")) {
+        if (args.isEmpty() || args.get(0).equalsIgnoreCase("stats")) {
             src.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lСТАТИСТИКА MIR-TIME GUARD:"));
             src.sendMessage(color(" &8▪ &fРежим осады: " + (isAttackMode() ? "&c&lВКЛЮЧЁН" : "&x&0&0&f&f&6&6выключен")));
             src.sendMessage(color(" &8▪ &fПроверенных IP в базе: &x&0&0&e&5&f&f" + verifiedIps.size()));
@@ -178,12 +181,12 @@ public class MirTimeGuard implements SimpleCommand {
             return;
         }
 
-        String sub = args.toLowerCase();
+        String sub = args.get(0).toLowerCase();
         if (sub.equals("reload")) {
             loadConfigs();
             src.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lMIR-TIME GUARD &8» &x&0&0&f&f&6&6Конфигурация перезагружена!"));
-        } else if (sub.equals("attack") && args.length >= 2) {
-            manualAttackMode = args.equalsIgnoreCase("on");
+        } else if (sub.equals("attack") && args.size() >= 2) {
+            manualAttackMode = args.get(1).equalsIgnoreCase("on");
             if (manualAttackMode) {
                 for (Player online : server.getAllPlayers()) {
                     if (online.getRemoteAddress() != null && online.getRemoteAddress().getAddress() != null) {
@@ -195,8 +198,8 @@ public class MirTimeGuard implements SimpleCommand {
                 attackModeUntil.set(0);
             }
             src.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lMIR-TIME GUARD &8» &fРежим осады вручную: " + (manualAttackMode ? "&c&lВКЛ" : "&x&0&0&f&f&6&6ВЫКЛ")));
-        } else if (sub.equals("verify") && args.length >= 2) {
-            String target = args;
+        } else if (sub.equals("verify") && args.size() >= 2) {
+            String target = args.get(1);
             Optional<Player> online = server.getPlayer(target);
             String ipToAdd = online.map(p -> p.getRemoteAddress().getAddress().getHostAddress()).orElse(target);
             verifiedIps.add(ipToAdd);
