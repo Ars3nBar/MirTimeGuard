@@ -1,0 +1,12 @@
+settings:
+  # Никнеймы админов, которым доступны команды /mtguard прямо с сервера main
+  admins:
+    - "Ars3nBar"
+  # Максимум попыток входа с одного IP за 10 секунд
+  max-connections-per-ip: 4
+  # Порог новых подключений в секунду для авто-включения «Режима осады»
+  attack-mode-threshold-per-sec: 12
+  # Длительность авто-режима осады в секундах после окончания атаки
+  attack-mode-duration-seconds: 60
+  # Блокировать ли команды /velocity, /vplugins, /glist для обычных игроков
+  block-proxy-commands: true
