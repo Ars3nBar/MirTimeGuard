@@ -43,6 +43,7 @@ public class MirTimeGuard implements SimpleCommand {
     private final Path dataDir;
 
     private final Set<String> verifiedIps = ConcurrentHashMap.newKeySet();
+    private final Set<String> verifiedNames = ConcurrentHashMap.newKeySet();
     private final Set<String> adminNames = ConcurrentHashMap.newKeySet();
     private final Map<String, List<Long>> ipAttempts = new ConcurrentHashMap<>();
 
@@ -74,18 +75,24 @@ public class MirTimeGuard implements SimpleCommand {
         server.getScheduler().buildTask(this, () -> {
             int cps = connectionsThisSec.getAndSet(0);
             if (cps >= attackThreshold && !isAttackMode()) {
-                for (Player online : server.getAllPlayers()) {
-                    if (online.getRemoteAddress() != null && online.getRemoteAddress().getAddress() != null) {
-                        verifiedIps.add(online.getRemoteAddress().getAddress().getHostAddress());
-                    }
-                }
-                saveVerified();
+                snapshotOnlinePlayers();
                 attackModeUntil.set(System.currentTimeMillis() + attackDurationSec * 1000L);
-                logger.warn("[MirTimeGuard] Обнаружена атака ({} входов/сек)! Включён РЕЖИМ ОСАДЫ на {} сек. Новые IP заблокированы.", cps, attackDurationSec);
+                logger.warn("[MirTimeGuard] Обнаружена атака ({} входов/сек)! Включён РЕЖИМ ОСАДЫ на {} сек.", cps, attackDurationSec);
             }
         }).repeat(1, TimeUnit.SECONDS).schedule();
 
-        logger.info("MirTimeGuard v1.0.0 (Авто-защита Velocity от бот-атак) запущен! В базе проверенных IP: {}", verifiedIps.size());
+        logger.info("MirTimeGuard v1.0.0 запущен! В базе: {} IP и {} ников.", verifiedIps.size(), verifiedNames.size());
+    }
+
+    private void snapshotOnlinePlayers() {
+        boolean changed = false;
+        for (Player online : server.getAllPlayers()) {
+            if (verifiedNames.add(online.getUsername().toLowerCase())) changed = true;
+            if (online.getRemoteAddress() != null && online.getRemoteAddress().getAddress() != null) {
+                if (verifiedIps.add(online.getRemoteAddress().getAddress().getHostAddress())) changed = true;
+            }
+        }
+        if (changed) saveVerified();
     }
 
     public boolean isAttackMode() {
@@ -107,9 +114,11 @@ public class MirTimeGuard implements SimpleCommand {
                 : "unknown";
         if (ip.equals("unknown") || ip.equals("127.0.0.1")) return;
 
+        String nameLower = e.getUsername().toLowerCase();
         long now = System.currentTimeMillis();
         connectionsThisSec.incrementAndGet();
 
+        // 1. Защита от спама подключениями с одного IP
         List<Long> list = ipAttempts.computeIfAbsent(ip, k -> Collections.synchronizedList(new ArrayList<>()));
         synchronized (list) {
             list.removeIf(t -> (now - t) > 10_000L);
@@ -124,7 +133,8 @@ public class MirTimeGuard implements SimpleCommand {
             list.add(now);
         }
 
-        if (isAttackMode() && !verifiedIps.contains(ip)) {
+        // 2. В Режиме Осады пускаем только тех, чей IP или ник уже есть в доверенной базе
+        if (isAttackMode() && !verifiedIps.contains(ip) && !verifiedNames.contains(nameLower)) {
             blockedBotsTotal.incrementAndGet();
             e.setResult(PreLoginEvent.PreLoginComponentResult.denied(color(
                     "&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lMIR-TIME GUARD &8» &cВход временно ограничен!\n\n" +
@@ -139,12 +149,11 @@ public class MirTimeGuard implements SimpleCommand {
     public void onPostLogin(PostLoginEvent e) {
         if (!isAttackMode()) {
             Player p = e.getPlayer();
+            boolean changed = verifiedNames.add(p.getUsername().toLowerCase());
             if (p.getRemoteAddress() != null && p.getRemoteAddress().getAddress() != null) {
-                String ip = p.getRemoteAddress().getAddress().getHostAddress();
-                if (verifiedIps.add(ip)) {
-                    saveVerified();
-                }
+                if (verifiedIps.add(p.getRemoteAddress().getAddress().getHostAddress())) changed = true;
             }
+            if (changed) saveVerified();
         }
     }
     @Subscribe
@@ -176,7 +185,7 @@ public class MirTimeGuard implements SimpleCommand {
         if (args.isEmpty() || args.get(0).equalsIgnoreCase("stats")) {
             src.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lСТАТИСТИКА MIR-TIME GUARD:"));
             src.sendMessage(color(" &8▪ &fРежим осады: " + (isAttackMode() ? "&c&lВКЛЮЧЁН" : "&x&0&0&f&f&6&6выключен")));
-            src.sendMessage(color(" &8▪ &fПроверенных IP в базе: &x&0&0&e&5&f&f" + verifiedIps.size()));
+            src.sendMessage(color(" &8▪ &fДоверенных IP: &x&0&0&e&5&f&f" + verifiedIps.size() + " &8| &fНиков: &x&0&0&e&5&f&f" + verifiedNames.size()));
             src.sendMessage(color(" &8▪ &fОтбито бот-подключений: &x&0&0&f&f&6&6" + blockedBotsTotal.get()));
             return;
         }
@@ -188,12 +197,7 @@ public class MirTimeGuard implements SimpleCommand {
         } else if (sub.equals("attack") && args.size() >= 2) {
             manualAttackMode = args.get(1).equalsIgnoreCase("on");
             if (manualAttackMode) {
-                for (Player online : server.getAllPlayers()) {
-                    if (online.getRemoteAddress() != null && online.getRemoteAddress().getAddress() != null) {
-                        verifiedIps.add(online.getRemoteAddress().getAddress().getHostAddress());
-                    }
-                }
-                saveVerified();
+                snapshotOnlinePlayers();
             } else {
                 attackModeUntil.set(0);
             }
@@ -201,10 +205,23 @@ public class MirTimeGuard implements SimpleCommand {
         } else if (sub.equals("verify") && args.size() >= 2) {
             String target = args.get(1);
             Optional<Player> online = server.getPlayer(target);
-            String ipToAdd = online.map(p -> p.getRemoteAddress().getAddress().getHostAddress()).orElse(target);
-            verifiedIps.add(ipToAdd);
-            saveVerified();
-            src.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lMIR-TIME GUARD &8» &x&0&0&f&f&6&6Адрес &f" + ipToAdd + " &x&0&0&f&f&6&6добавлен в белый список!"));
+            if (online.isPresent()) {
+                Player p = online.get();
+                verifiedNames.add(p.getUsername().toLowerCase());
+                if (p.getRemoteAddress() != null && p.getRemoteAddress().getAddress() != null) {
+                    verifiedIps.add(p.getRemoteAddress().getAddress().getHostAddress());
+                }
+                saveVerified();
+                src.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lMIR-TIME GUARD &8» &x&0&0&f&f&6&6Игрок &f" + p.getUsername() + " &x&0&0&f&f&6&6(ник + IP) добавлен в белый список!"));
+            } else if (target.contains(".") || target.contains(":")) {
+                verifiedIps.add(target);
+                saveVerified();
+                src.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lMIR-TIME GUARD &8» &x&0&0&f&f&6&6IP &f" + target + " &x&0&0&f&f&6&6добавлен в белый список!"));
+            } else {
+                verifiedNames.add(target.toLowerCase());
+                saveVerified();
+                src.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lMIR-TIME GUARD &8» &x&0&0&f&f&6&6Ник &f" + target + " &x&0&0&f&f&6&6добавлен в белый список!"));
+            }
         } else {
             src.sendMessage(color("&x&0&0&5&5&f&f&l⚡ &x&0&0&e&5&f&f&lMIR-TIME GUARD &8» &fКоманды: &x&0&0&f&f&6&6/mtguard stats | attack <on|off> | verify <ник/ip> | reload"));
         }
@@ -240,9 +257,15 @@ public class MirTimeGuard implements SimpleCommand {
             if (Files.exists(verPath)) {
                 try (InputStream in = Files.newInputStream(verPath)) {
                     Map<String, Object> vRoot = yaml.load(in);
-                    if (vRoot != null && vRoot.get("verified-ips") instanceof List<?> ips) {
-                        verifiedIps.clear();
-                        for (Object o : ips) verifiedIps.add(String.valueOf(o));
+                    if (vRoot != null) {
+                        if (vRoot.get("verified-ips") instanceof List<?> ips) {
+                            verifiedIps.clear();
+                            for (Object o : ips) verifiedIps.add(String.valueOf(o));
+                        }
+                        if (vRoot.get("verified-names") instanceof List<?> names) {
+                            verifiedNames.clear();
+                            for (Object o : names) verifiedNames.add(String.valueOf(o).toLowerCase());
+                        }
                     }
                 }
             }
@@ -260,6 +283,7 @@ public class MirTimeGuard implements SimpleCommand {
             Yaml yaml = new Yaml(opts);
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("verified-ips", new ArrayList<>(verifiedIps));
+            data.put("verified-names", new ArrayList<>(verifiedNames));
             try (Writer w = Files.newBufferedWriter(verPath, StandardCharsets.UTF_8)) {
                 yaml.dump(data, w);
             }
